@@ -443,7 +443,11 @@ async def _stop_stale_agents(agents: dict[str, dict]) -> None:
         room_id = int(room_id)
         # Re-check under the room lock: a connect may be committing right now.
         async with room_lock(room_id), get_session() as session:
-            row = (await session.execute(select(Room, Event).join(Event).where(Room.id == room_id))).first()
+            row = (
+                await session.execute(
+                    select(Room, Event).join(Event).where(Room.id == room_id, Event.deleted_at.is_(None))
+                )
+            ).first()
             if (
                 row
                 and row[1].slug == event_slug
@@ -458,7 +462,11 @@ async def _stop_stale_agents(agents: dict[str, dict]) -> None:
 async def reconcile_once() -> None:
     global _last_sweep, _unreachable
     async with get_session() as session:
-        rows = (await session.execute(select(Room.id, Event.slug).join(Event).where(Room.meeting_agent_enabled))).all()
+        rows = (
+            await session.execute(
+                select(Room.id, Event.slug).join(Event).where(Room.meeting_agent_enabled, Event.deleted_at.is_(None))
+            )
+        ).all()
     ids = [room_id for room_id, _ in rows]
     for room_id in set(health) - set(ids):
         health.pop(room_id, None)
@@ -491,7 +499,11 @@ async def reconcile_once() -> None:
     for room_id in ids:
         try:
             async with room_lock(room_id), get_session() as session:
-                row = (await session.execute(select(Room, Event).join(Event).where(Room.id == room_id))).first()
+                row = (
+                    await session.execute(
+                        select(Room, Event).join(Event).where(Room.id == room_id, Event.deleted_at.is_(None))
+                    )
+                ).first()
                 if not row or not row[0].meeting_agent_enabled:
                     continue
                 room, event = row

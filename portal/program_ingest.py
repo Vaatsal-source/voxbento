@@ -726,7 +726,9 @@ async def reconcile_once() -> None:
     async with get_session() as session:
         rows = (
             await session.execute(
-                select(Room.id, Room.program_ingest_mode).where(Room.floor_source == "program_ingest")
+                select(Room.id, Room.program_ingest_mode)
+                .join(Event)
+                .where(Room.floor_source == "program_ingest", Event.deleted_at.is_(None))
             )
         ).all()
     ids = [room_id for room_id, _ in rows]
@@ -749,7 +751,11 @@ async def reconcile_once() -> None:
     for room_id in ids:
         try:
             async with room_lock(room_id), get_session() as session:
-                row = (await session.execute(select(Room, Event).join(Event).where(Room.id == room_id))).first()
+                row = (
+                    await session.execute(
+                        select(Room, Event).join(Event).where(Room.id == room_id, Event.deleted_at.is_(None))
+                    )
+                ).first()
                 if row and row[0].floor_source == "program_ingest":
                     path_name = make_mediamtx_path(row[1].slug, room_id, "floor")
                     request = await reconcile_room(*row, snapshots.get(path_name))

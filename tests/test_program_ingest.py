@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -542,3 +542,31 @@ async def test_program_final_pipeline_preserves_timing_and_multiple_languages(en
     finally:
         for lang in ["fr", "es"]:
             tts_manager._rooms.pop(tts_manager._get_key(room.id, lang, booth), None)
+
+
+@pytest.mark.anyio
+async def test_deleted_event_room_is_not_reconciled(environment):
+    client, event, rooms, media, _, start, stop = environment
+    room = rooms[0]
+    token = await enable(client, event, room)
+    auth = credentials(room, token)
+    assert (await client.post("/internal/media-auth", json=auth)).status_code == 204
+    media[auth["path"]] = {
+        "name": auth["path"],
+        "ready": True,
+        "source": {"type": "webRTCSession", "id": auth["id"]},
+        "tracks": ["Opus"],
+        "bytesReceived": 10,
+    }
+    await ingest.reconcile_once()
+    assert start.await_count == 1
+
+    async with get_session() as session:
+        db_event = await session.get(Event, event.id)
+        db_event.deleted_at = datetime.now(timezone.utc)
+
+    start.reset_mock()
+    ingest.health.clear()
+    await ingest.reconcile_once()
+    start.assert_not_awaited()
+    assert room.id not in ingest.health

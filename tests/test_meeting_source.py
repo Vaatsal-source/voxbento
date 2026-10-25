@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 import httpx
@@ -713,3 +714,24 @@ async def test_owner_endpoints_reject_cross_origin_and_wrong_event(env):
     wrong = f"/workspace/events/{env['event_id'] + 99}/rooms/{env['room_id']}/meeting-source"
     assert (await env["client"].get(wrong)).status_code in {403, 404}
     assert env["agents"].starts == []
+
+
+@pytest.mark.anyio
+async def test_deleted_event_agent_is_stopped_and_room_is_not_reconciled(env):
+    response = await env["client"].post(
+        env["url"], json={"action": "connect", "meeting_url": "https://meet.example.org/TrackA"}
+    )
+    assert response.status_code == 200, response.text
+    await meeting.reconcile_once()
+    assert env["key"] in env["agents"].rooms
+    assert env["agents"].stops == []
+
+    async with get_session() as session:
+        event = await session.get(Event, env["event_id"])
+        event.deleted_at = datetime.now(timezone.utc)
+
+    # With no enabled room left, the stale-agent sweep runs on the idle interval.
+    env["clock"].now += meeting.IDLE_SWEEP_SECS
+    await meeting.reconcile_once()
+    assert env["agents"].stops == [env["key"]]
+    assert env["room_id"] not in meeting.health
