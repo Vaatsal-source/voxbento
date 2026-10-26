@@ -722,6 +722,24 @@ async def reconcile_processing(
         current.processing_state, current.processing_reason = current.state, current.reason
 
 
+async def stop_deleted_event_workers(room_ids: set[int]) -> None:
+    """Stop the floor worker of rooms whose event was deleted.
+
+    A delete can commit after a reconcile pass already read the room and started its worker, so
+    the reconciler cleans up rather than the delete: once the event is deleted it no longer sees the room.
+    """
+    if not room_ids:
+        return
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(Room.id, Event.slug).join(Event).where(Room.id.in_(room_ids), Event.deleted_at.is_not(None))
+            )
+        ).all()
+    for room_id, slug in rows:
+        await stop_room_worker(health[room_id], make_booth_id(slug, room_id, "floor"), room_id)
+
+
 async def reconcile_once() -> None:
     async with get_session() as session:
         rows = (
@@ -777,6 +795,7 @@ async def reconcile_once() -> None:
     if settings.program_relay_enabled:
         # Also runs with no relay rooms so orphaned relays from a restart or switch are stopped.
         await program_relay.sync(wanted, relay_rooms)
+    await stop_deleted_event_workers(set(health) - set(ids))
     for room_id in set(health) - set(ids):
         health.pop(room_id, None)
 

@@ -119,27 +119,6 @@ class TestApiV1IDOR:
             assert result.scalars().first() is None
 
     @pytest.mark.anyio
-    async def test_delete_event_stops_floor_transcription_workers(self, seed_data, monkeypatch):
-        """Deleting an event stops the floor transcription worker of each of its rooms."""
-        from unittest.mock import AsyncMock
-
-        from portal.booth_identity import make_booth_id
-        from portal.routers import api_v1
-
-        event_a, room_a, *_rest, token_a = seed_data
-        stop = AsyncMock()
-        monkeypatch.setattr(api_v1, "stop_transcription_worker", stop)
-
-        async with _client() as c:
-            response = await c.delete(
-                f"/api/v1/events/{event_a.slug}",
-                headers={"Authorization": f"Bearer {token_a}"},
-            )
-
-        assert response.status_code == 204
-        stop.assert_awaited_once_with(make_booth_id(event_a.slug, room_a.id, "floor"))
-
-    @pytest.mark.anyio
     async def test_deleted_event_cannot_be_restored_by_create_event(self, seed_data):
         """Posting a deleted slug does not restore the event or update its name."""
         event_a, *_rest, token_a = seed_data

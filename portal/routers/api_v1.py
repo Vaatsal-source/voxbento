@@ -480,12 +480,6 @@ async def delete_event(
 
     event.deleted_at = datetime.now(timezone.utc)
 
-    # The reconcilers stop agents and relays for rooms of deleted events, but floor transcription
-    # workers are only stopped by their owner, so stop them here.
-    room_ids = (await db.execute(select(Room.id).where(Room.event_id == event.id))).scalars().all()
-    for room_id in room_ids:
-        await stop_transcription_worker(make_booth_id(event.slug, room_id, "floor"))
-
     audit = OAuthAuditLog(
         token_id=token.id,
         client_id=token.client_id,

@@ -459,6 +459,24 @@ async def _stop_stale_agents(agents: dict[str, dict]) -> None:
             logger.info("meeting_agent stale_agent_stopped room_id=%s", room_id)
 
 
+async def _stop_deleted_event_workers(room_ids: set[int]) -> None:
+    """Stop the floor worker of rooms whose event was deleted.
+
+    A delete can commit after a reconcile pass already read the room and started its worker, so
+    the reconciler cleans up rather than the delete: once the event is deleted it no longer sees the room.
+    """
+    if not room_ids:
+        return
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(Room.id, Event.slug).join(Event).where(Room.id.in_(room_ids), Event.deleted_at.is_not(None))
+            )
+        ).all()
+    for room_id, slug in rows:
+        await _stop_worker(health[room_id], make_booth_id(slug, room_id, "floor"))
+
+
 async def reconcile_once() -> None:
     global _last_sweep, _unreachable
     async with get_session() as session:
@@ -468,6 +486,7 @@ async def reconcile_once() -> None:
             )
         ).all()
     ids = [room_id for room_id, _ in rows]
+    await _stop_deleted_event_workers(set(health) - set(ids))
     for room_id in set(health) - set(ids):
         health.pop(room_id, None)
     if not rows and monotonic() - _last_sweep < IDLE_SWEEP_SECS:

@@ -717,21 +717,26 @@ async def test_owner_endpoints_reject_cross_origin_and_wrong_event(env):
 
 
 @pytest.mark.anyio
-async def test_deleted_event_agent_is_stopped_and_room_is_not_reconciled(env):
+async def test_deleted_event_agent_and_worker_are_stopped(env):
     response = await env["client"].post(
         env["url"], json={"action": "connect", "meeting_url": "https://meet.example.org/TrackA"}
     )
     assert response.status_code == 200, response.text
+    env["agents"].rooms[env["key"]]["stage"] = "in_meeting"
     await meeting.reconcile_once()
-    assert env["key"] in env["agents"].rooms
+    publish(env, 100)
+    await meeting.reconcile_once()
+    env["start"].assert_awaited_once()
     assert env["agents"].stops == []
 
     async with get_session() as session:
         event = await session.get(Event, env["event_id"])
         event.deleted_at = datetime.now(timezone.utc)
 
+    env["stop"].reset_mock()
     # With no enabled room left, the stale-agent sweep runs on the idle interval.
     env["clock"].now += meeting.IDLE_SWEEP_SECS
     await meeting.reconcile_once()
     assert env["agents"].stops == [env["key"]]
+    env["stop"].assert_awaited_once_with(env["booth_id"])
     assert env["room_id"] not in meeting.health

@@ -545,7 +545,7 @@ async def test_program_final_pipeline_preserves_timing_and_multiple_languages(en
 
 
 @pytest.mark.anyio
-async def test_deleted_event_room_is_not_reconciled(environment):
+async def test_deleted_event_room_worker_is_stopped(environment):
     client, event, rooms, media, _, start, stop = environment
     room = rooms[0]
     token = await enable(client, event, room)
@@ -566,7 +566,8 @@ async def test_deleted_event_room_is_not_reconciled(environment):
         db_event.deleted_at = datetime.now(timezone.utc)
 
     start.reset_mock()
-    ingest.health.clear()
+    stop.reset_mock()
     await ingest.reconcile_once()
     start.assert_not_awaited()
+    stop.assert_awaited_once_with(f"program-test-{room.id}-floor")
     assert room.id not in ingest.health
