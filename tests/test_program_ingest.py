@@ -571,3 +571,35 @@ async def test_deleted_event_room_worker_is_stopped(environment):
     start.assert_not_awaited()
     stop.assert_awaited_once_with(f"program-test-{room.id}-floor")
     assert room.id not in ingest.health
+
+
+@pytest.mark.anyio
+async def test_deleted_event_worker_is_stopped_while_media_listing_fails(environment, monkeypatch):
+    client, event, rooms, media, _, start, stop = environment
+    room = rooms[0]
+    token = await enable(client, event, room)
+    auth = credentials(room, token)
+    assert (await client.post("/internal/media-auth", json=auth)).status_code == 204
+    media[auth["path"]] = {
+        "name": auth["path"],
+        "ready": True,
+        "source": {"type": "webRTCSession", "id": auth["id"]},
+        "tracks": ["Opus"],
+        "bytesReceived": 10,
+    }
+    await ingest.reconcile_once()
+    assert start.await_count == 1
+
+    async with get_session() as session:
+        other = Event(slug="other-event", display_name="Other Event")
+        session.add(other)
+        await session.flush()
+        session.add(Room(event_id=other.id, display_name="Other Room", floor_source="program_ingest"))
+        db_event = await session.get(Event, event.id)
+        db_event.deleted_at = datetime.now(timezone.utc)
+
+    # Another room is still active, so the media paths are requested, and that request fails.
+    monkeypatch.setattr(ingest, "media_paths", AsyncMock(side_effect=httpx.ConnectError("media down")))
+    stop.reset_mock()
+    await ingest.reconcile_once()
+    stop.assert_awaited_once_with(f"program-test-{room.id}-floor")

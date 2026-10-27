@@ -751,6 +751,7 @@ async def reconcile_once() -> None:
         ).all()
     ids = [room_id for room_id, _ in rows]
     relay_rooms = {room_id for room_id, mode in rows if mode == program_relay.RELAY_MODE}
+    await stop_deleted_event_workers(set(health) - set(ids))
     try:
         snapshots = await media_paths() if ids else {}
     except (httpx.HTTPError, ValueError):
@@ -795,7 +796,6 @@ async def reconcile_once() -> None:
     if settings.program_relay_enabled:
         # Also runs with no relay rooms so orphaned relays from a restart or switch are stopped.
         await program_relay.sync(wanted, relay_rooms)
-    await stop_deleted_event_workers(set(health) - set(ids))
     for room_id in set(health) - set(ids):
         health.pop(room_id, None)
 
