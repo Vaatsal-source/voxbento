@@ -26,7 +26,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from portal import program_relay
-from portal.booth_identity import make_booth_id, make_mediamtx_path
+from portal.booth_identity import make_booth_id, make_mediamtx_path, parse_booth_id
 from portal.booth_publish import authorize_booth_publish
 from portal.config import settings
 from portal.database import get_session
@@ -35,7 +35,7 @@ from portal.models import Event, Room
 from portal.outage_log import OutageLog
 from portal.transcription.process import audio_progress
 from portal.transcription.providers.base import ProviderConfig, ProviderEnum, get_api_key
-from portal.transcription.worker import start_transcription_worker, stop_transcription_worker
+from portal.transcription.worker import active_workers, start_transcription_worker, stop_transcription_worker
 from portal.websockets.manager import broadcast_transcription
 
 logger = logging.getLogger(__name__)
@@ -722,22 +722,31 @@ async def reconcile_processing(
         current.processing_state, current.processing_reason = current.state, current.reason
 
 
-async def stop_deleted_event_workers(room_ids: set[int]) -> None:
+async def stop_deleted_event_workers() -> None:
     """Stop the floor worker of rooms whose event was deleted.
 
-    A delete can commit after a reconcile pass already read the room and started its worker, so
-    the reconciler cleans up rather than the delete: once the event is deleted it no longer sees the room.
+    A delete can commit after a reconcile pass already read the room and started its worker, and
+    ``health`` can lose the room before that (``close_sender_session``), so find the workers among
+    the running ones instead: once the event is deleted the reconciler no longer sees the room.
     """
-    if not room_ids:
+    booth_ids: dict[int, str] = {}
+    for booth_id in list(active_workers):
+        try:
+            _, room_id, language_code = parse_booth_id(booth_id)
+        except ValueError:
+            continue
+        if language_code == "floor":
+            booth_ids[room_id] = booth_id
+    if not booth_ids:
         return
     async with get_session() as session:
-        rows = (
-            await session.execute(
-                select(Room.id, Event.slug).join(Event).where(Room.id.in_(room_ids), Event.deleted_at.is_not(None))
+        deleted_room_ids = (
+            await session.scalars(
+                select(Room.id).join(Event).where(Room.id.in_(booth_ids), Event.deleted_at.is_not(None))
             )
         ).all()
-    for room_id, slug in rows:
-        await stop_room_worker(health[room_id], make_booth_id(slug, room_id, "floor"), room_id)
+    for room_id in deleted_room_ids:
+        await stop_room_worker(health.get(room_id) or IngestHealth(), booth_ids[room_id], room_id)
 
 
 async def reconcile_once() -> None:
@@ -751,7 +760,7 @@ async def reconcile_once() -> None:
         ).all()
     ids = [room_id for room_id, _ in rows]
     relay_rooms = {room_id for room_id, mode in rows if mode == program_relay.RELAY_MODE}
-    await stop_deleted_event_workers(set(health) - set(ids))
+    await stop_deleted_event_workers()
     try:
         snapshots = await media_paths() if ids else {}
     except (httpx.HTTPError, ValueError):
