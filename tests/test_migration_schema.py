@@ -6,16 +6,17 @@ no migration covers (or the reverse) would pass every other test and only break 
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from alembic.autogenerate import compare_metadata
-from alembic.command import upgrade
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine
 
-from portal.config import settings
 from portal.models import Base
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,15 +29,19 @@ def alembic_config() -> Config:
 
 
 def test_migrations_have_a_single_head():
-    # Two branches (for example two PRs that both add revision 039) make ``alembic upgrade head`` fail.
     assert len(ScriptDirectory.from_config(alembic_config()).get_heads()) == 1
 
 
-def test_migrations_build_the_schema_the_models_describe(tmp_path, monkeypatch):
+def test_migrations_build_the_schema_the_models_describe(tmp_path):
     db_path = tmp_path / "migrated.db"
-    monkeypatch.setattr(settings, "database_url", f"sqlite+aiosqlite:///{db_path}")
-
-    upgrade(alembic_config(), "head")
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=ROOT,
+        env={**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
     engine = create_engine(f"sqlite:///{db_path}")
     try:
