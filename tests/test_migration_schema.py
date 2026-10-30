@@ -29,15 +29,22 @@ def alembic_config() -> Config:
 
 
 def test_migrations_have_a_single_head():
+    # Two branches (for example two PRs that both add revision 039) make ``alembic upgrade head`` fail.
     assert len(ScriptDirectory.from_config(alembic_config()).get_heads()) == 1
 
 
 def test_migrations_build_the_schema_the_models_describe(tmp_path):
     db_path = tmp_path / "migrated.db"
+    # Run the command a deployment runs, in its own process: Alembic's env.py reconfigures logging
+    # (silencing existing loggers) and starts its own event loop, which must not leak into other tests.
+    # Drop every spelling of DATABASE_URL first: settings read environment names case-insensitively,
+    # so an inherited lowercase one could win and the upgrade would run against another database.
+    env = {key: value for key, value in os.environ.items() if key.upper() != "DATABASE_URL"}
+    env["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path}"
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=ROOT,
-        env={**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}"},
+        env=env,
         capture_output=True,
         text=True,
     )
